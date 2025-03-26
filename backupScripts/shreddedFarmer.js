@@ -7,6 +7,8 @@ const shreddedFarmerConfig = {
   CREDENTIALS_PATH: path.join(__dirname, "../credentials/shreddedCredential.json"),
   DRIVE_FOLDER_ID: "1ro0QK2esxTHD1A7vfgl3nAeV5pt3gu3T",
 };
+console.log("shreddedFarmerConfig", shreddedFarmerConfig);
+
 
 const backupShreddedFarmer = () => backupDatabase(shreddedFarmerConfig);
 

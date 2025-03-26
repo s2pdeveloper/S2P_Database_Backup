@@ -9,6 +9,7 @@ if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
 const authenticateGoogleDrive = async (credentialsPath) => {
   try {
+    console.log(`🔑 Reading credentials from: ${credentialsPath}`);
     const auth = new google.auth.GoogleAuth({
       keyFile: credentialsPath,
       scopes: ["https://www.googleapis.com/auth/drive"],
