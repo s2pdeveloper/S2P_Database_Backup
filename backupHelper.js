@@ -3,9 +3,10 @@ const fs = require("fs");
 const archiver = require("archiver");
 const { google } = require("googleapis");
 const path = require("path");
+const os = require("os");
 
-const BACKUP_DIR = path.join(__dirname, "backups");
-if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+// Dumps are staged in the OS temp dir and deleted after upload; Drive is the only copy.
+const BACKUP_DIR = os.tmpdir();
 
 const authenticateGoogleDrive = async (credentialsPath) => {
   try {
@@ -56,6 +57,7 @@ const backupDatabase = async ({
   exec(dumpCommand, (error) => {
     if (error) {
       console.error(`Backup failed for ${BACKUP_NAME}:`, error.message);
+      fs.rmSync(dumpPath, { recursive: true, force: true });
       return;
     }
 
@@ -68,15 +70,23 @@ const backupDatabase = async ({
     output.on("close", async () => {
       console.log(`Backup ZIP created: ${zipPath}`);
       fs.rmSync(dumpPath, { recursive: true, force: true });
-      await uploadToDrive(
-        zipPath,
-        `${BACKUP_NAME}-${timestamp}.zip`,
-        CREDENTIALS_PATH,
-        DRIVE_FOLDER_ID
-      );
+      try {
+        await uploadToDrive(
+          zipPath,
+          `${BACKUP_NAME}-${timestamp}.zip`,
+          CREDENTIALS_PATH,
+          DRIVE_FOLDER_ID
+        );
+      } finally {
+        fs.rmSync(zipPath, { force: true });
+      }
     });
 
-    archive.on("error", (err) => console.error("Error creating ZIP:", err));
+    archive.on("error", (err) => {
+      console.error("Error creating ZIP:", err);
+      fs.rmSync(dumpPath, { recursive: true, force: true });
+      fs.rmSync(zipPath, { force: true });
+    });
   });
 };
 
