@@ -4,9 +4,8 @@ const { backupShreddedFarmer } = require("./backupScripts/shreddedFarmer");
 const startBackupJobs = () => {
   cron.schedule("0 23 * * *", () => {
     console.log(" Running daily scheduled backups...");
+    backupShreddedFarmer();
   });
 };
-
-backupShreddedFarmer();
 
 startBackupJobs();
