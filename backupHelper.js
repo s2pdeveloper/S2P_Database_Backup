@@ -1,12 +1,5 @@
-const { exec } = require("child_process");
-const fs = require("fs");
-const archiver = require("archiver");
+const { spawn } = require("child_process");
 const { google } = require("googleapis");
-const path = require("path");
-const os = require("os");
-
-// Dumps are staged in the OS temp dir and deleted after upload; Drive is the only copy.
-const BACKUP_DIR = os.tmpdir();
 
 const authenticateGoogleDrive = async (credentialsPath) => {
   try {
@@ -22,25 +15,8 @@ const authenticateGoogleDrive = async (credentialsPath) => {
   }
 };
 
-const uploadToDrive = async (filePath, fileName, credentialsPath, folderId) => {
-  const drive = await authenticateGoogleDrive(credentialsPath);
-  if (!drive) return;
-
-  try {
-    const response = await drive.files.create({
-      resource: { name: fileName, parents: [folderId] },
-      media: {
-        mimeType: "application/zip",
-        body: fs.createReadStream(filePath),
-      },
-      fields: "id",
-    });
-    console.log(`Backup uploaded: File ID ${response.data.id}`);
-  } catch (error) {
-    console.error("Error uploading file:", error.message);
-  }
-};
-
+// Streams `mongodump --archive --gzip` straight to Google Drive; nothing is written to local disk.
+// Restore with: mongorestore --uri="<MONGO_URL>" --archive=<file>.archive.gz --gzip
 const backupDatabase = async ({
   MONGO_URL,
   BACKUP_NAME,
@@ -48,46 +24,41 @@ const backupDatabase = async ({
   DRIVE_FOLDER_ID,
 }) => {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dumpPath = path.join(BACKUP_DIR, `${BACKUP_NAME}-${timestamp}`);
-  const zipPath = `${dumpPath}.zip`;
-  const dumpCommand = `mongodump --uri="${MONGO_URL}" --out="${dumpPath}" --gzip`;
+  const fileName = `${BACKUP_NAME}-${timestamp}.archive.gz`;
+
+  const drive = await authenticateGoogleDrive(CREDENTIALS_PATH);
+  if (!drive) return;
 
   console.log(`Running backup for ${BACKUP_NAME}...`);
 
-  exec(dumpCommand, (error) => {
-    if (error) {
-      console.error(`Backup failed for ${BACKUP_NAME}:`, error.message);
-      fs.rmSync(dumpPath, { recursive: true, force: true });
+  const dump = spawn("mongodump", [`--uri=${MONGO_URL}`, "--archive", "--gzip"]);
+  let stderr = "";
+  dump.stderr.on("data", (chunk) => (stderr += chunk));
+  const dumpDone = new Promise((resolve) =>
+    dump.on("close", (code) => resolve(code))
+  );
+  dump.on("error", (err) =>
+    console.error(`Could not start mongodump for ${BACKUP_NAME}:`, err.message)
+  );
+
+  try {
+    const response = await drive.files.create({
+      resource: { name: fileName, parents: [DRIVE_FOLDER_ID] },
+      media: { mimeType: "application/gzip", body: dump.stdout },
+      fields: "id",
+    });
+
+    const code = await dumpDone;
+    if (code !== 0) {
+      console.error(`Backup failed for ${BACKUP_NAME}:`, stderr.trim());
+      await drive.files.delete({ fileId: response.data.id });
       return;
     }
-
-    const output = fs.createWriteStream(zipPath);
-    const archive = archiver("zip", { zlib: { level: 9 } });
-    archive.pipe(output);
-    archive.directory(dumpPath, false);
-    archive.finalize();
-
-    output.on("close", async () => {
-      console.log(`Backup ZIP created: ${zipPath}`);
-      fs.rmSync(dumpPath, { recursive: true, force: true });
-      try {
-        await uploadToDrive(
-          zipPath,
-          `${BACKUP_NAME}-${timestamp}.zip`,
-          CREDENTIALS_PATH,
-          DRIVE_FOLDER_ID
-        );
-      } finally {
-        fs.rmSync(zipPath, { force: true });
-      }
-    });
-
-    archive.on("error", (err) => {
-      console.error("Error creating ZIP:", err);
-      fs.rmSync(dumpPath, { recursive: true, force: true });
-      fs.rmSync(zipPath, { force: true });
-    });
-  });
+    console.log(`Backup uploaded: ${fileName} (File ID ${response.data.id})`);
+  } catch (error) {
+    dump.kill();
+    console.error(`Error uploading backup for ${BACKUP_NAME}:`, error.message);
+  }
 };
 
 module.exports = { backupDatabase };
